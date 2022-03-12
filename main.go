@@ -333,15 +333,23 @@ func ensureConf() {
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	cmd := &cobra.Command{
-		Use:   "kcm",
-		Short: "kcm a simple way to manage and use your kubeconfigs",
-		Long:  `KubeConfg Manager allows you to keep track of your various kubeconfig files and easily switch between them`,
+	runCmd := &cobra.Command{
+		Use:   "run",
+		Short: "Run kcm selector interface; can also just run `kcm` with no subcommands",
 		Run: func(cmd *cobra.Command, args []string) {
 			ensureConf()
 			runTui()
 		},
 	}
+
+	cmd := &cobra.Command{
+		Use:   "kcm",
+		Short: "kcm a simple way to manage and use your kubeconfigs",
+		Long:  `KubeConfg Manager allows you to keep track of your various kubeconfig files and easily switch between them`,
+		Run:   runCmd.Run,
+	}
+
+	cmd.AddCommand(runCmd)
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "list",
