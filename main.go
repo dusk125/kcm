@@ -275,7 +275,8 @@ func (m *model) View() string {
 
 func runTui() {
 	if os.Getenv("KUBECONFIG") == "" {
-		log.Fatalf("KUBECONFIG needs to be set:\n\texport KUBECONFIG=%v\n", conf.KubeconfigLink)
+		fmt.Printf("KUBECONFIG needs to be set:\n\texport KUBECONFIG=%v\n", conf.KubeconfigLink)
+		os.Exit(0)
 	}
 
 	p := tea.NewProgram(initialModel())
