@@ -296,7 +296,6 @@ func ensureConf() {
 	}
 
 	userConf := path.Join(home, ".kcm")
-
 	if _, err = os.Stat(userConf); os.IsExist(err) {
 		var (
 			fi *os.File
@@ -323,7 +322,9 @@ func ensureConf() {
 		conf = config.Default
 		conf.Replace("$HOME", home)
 
-		if err = json.NewEncoder(fi).Encode(&conf); err != nil {
+		enc := json.NewEncoder(fi)
+		enc.SetIndent("", "\t")
+		if err = enc.Encode(&conf); err != nil {
 			log.Fatalln(err)
 		}
 	}

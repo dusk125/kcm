@@ -12,7 +12,7 @@ var (
 				Lifespan:   150,
 			},
 		},
-		KubeconfigLink: "$HOME/.cluster",
+		KubeconfigLink: "$HOME/.kcm-active",
 	}
 )
 
