@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -11,10 +12,67 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/dusk125/kcm/pkg/config"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
+)
+
+type keyMap struct {
+	Up      key.Binding
+	Down    key.Binding
+	Refresh key.Binding
+	Quit    key.Binding
+	Delete  key.Binding
+	Clear   key.Binding
+	Select  key.Binding
+}
+
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Up, k.Down, k.Select, k.Quit}
+}
+
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Refresh, k.Clear, k.Delete},
+		{k.Up, k.Down, k.Select, k.Quit},
+	}
+}
+
+var (
+	keys = keyMap{
+		Up: key.NewBinding(
+			key.WithKeys("up", "w"),
+			key.WithHelp("↑/w", "move up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "s"),
+			key.WithHelp("↓/s", "move down"),
+		),
+		Refresh: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "refresh"),
+		),
+		Quit: key.NewBinding(
+			key.WithKeys("q", "ctrl+c"),
+			key.WithHelp("q/ctrl+c", "quit"),
+		),
+		Delete: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "delete"),
+		),
+		Clear: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "clear"),
+		),
+		Select: key.NewBinding(
+			key.WithKeys("e", "enter", " "),
+			key.WithHelp("e/enter/space", "select"),
+		),
+	}
 )
 
 type fileInfo struct {
@@ -40,23 +98,30 @@ func (f fileInfo) Expired() bool {
 }
 
 var (
-	conf config.Config
+	conf      config.Config
+	greenText = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	redText   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 )
 
 type clusterList []fileInfo
 type activeMsg string
 
 type model struct {
+	keys     keyMap
+	help     help.Model
 	clusters clusterList
 	cursor   int
 	err      error
 	active   string
 }
 
-func initialModel() *model {
-	return &model{
+func initialModel() (m *model) {
+	m = &model{
+		keys:     keys,
+		help:     help.New(),
 		clusters: make(clusterList, 0),
 	}
+	return
 }
 
 func initialState() tea.Msg {
@@ -106,7 +171,9 @@ func rmActive() tea.Msg {
 }
 
 func (m *model) addActive() tea.Msg {
-	return os.Symlink(m.clusters[m.cursor].Path(), conf.KubeconfigLink)
+	cluster := m.clusters[m.cursor]
+	fmt.Printf("%v is now your active kubeconfig.\n", cluster.Name)
+	return os.Symlink(cluster.Path(), conf.KubeconfigLink)
 }
 
 func (m *model) Init() tea.Cmd {
@@ -118,31 +185,47 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clusterList:
 		m.clusters = msg
 		sort.Slice(m.clusters, func(i, j int) bool {
+			ic, jc := m.clusters[i], m.clusters[j]
+			eic, ejc := ic.Expired(), jc.Expired()
+			if eic != ejc {
+				switch {
+				case eic:
+					return false
+				case ejc:
+					return true
+				}
+			}
 			return m.clusters[j].Time.After(m.clusters[i].Time)
 		})
 	case error:
 		m.err = msg
 	case activeMsg:
 		m.active = string(msg)
+	case tea.WindowSizeMsg:
+		m.help.Width = msg.Width
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
+		switch {
+		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
-		case "up", "j", "w":
+		case key.Matches(msg, m.keys.Up):
 			if m.cursor > 0 {
 				m.cursor--
 			}
-		case "down", "k", "s":
+		case key.Matches(msg, m.keys.Down):
 			if m.cursor < len(m.clusters)-1 {
 				m.cursor++
 			}
-		case "enter", " ":
+		case key.Matches(msg, m.keys.Select):
 			return m, tea.Sequentially(rmActive, m.addActive, tea.Quit)
-		case "r":
+		case key.Matches(msg, m.keys.Refresh):
 			return m, initialState
-		case "d":
-			return m, tea.Sequentially(m.clusters[m.cursor].Delete, initialState)
-		case "c":
+		case key.Matches(msg, m.keys.Delete):
+			cmds := []tea.Cmd{m.clusters[m.cursor].Delete, initialState}
+			if active := readActive().(activeMsg); string(active) == m.clusters[m.cursor].Name {
+				cmds = append([]tea.Cmd{rmActive}, cmds...)
+			}
+			return m, tea.Sequentially(cmds...)
+		case key.Matches(msg, m.keys.Clear):
 			if m.active != "" {
 				return m, tea.Sequentially(rmActive, readActive)
 			}
@@ -163,22 +246,24 @@ func (m *model) View() string {
 			if m.cursor == i {
 				cursor = ">"
 			}
-			ss := []string{cursor}
+			ss := []string{cursor, "["}
 			if cluster.Name == m.active {
-				ss = append(ss, "[x]")
+				ss = append(ss, greenText.Render("x"))
 			} else {
-				ss = append(ss, "[ ]")
+				ss = append(ss, " ")
 			}
+			ss = append(ss, "]")
 			if cluster.Expired() {
-				ss = append(ss, "[EXPIRED]")
+				ss = append(ss, "[", redText.Render("EXPIRED"), "]")
 			}
 			ss = append(ss, cluster.Name)
 			s += strings.Join(ss, " ") + "\n"
 		}
 	}
 
-	s += "\nPress r to refresh | Press d to delete | Press c to clear active | Press q to quit.\n"
-	return s
+	helpview := m.help.FullHelpView(m.keys.FullHelp())
+
+	return s + "\n\n" + helpview + "\n"
 }
 
 func runTui() {
@@ -258,10 +343,18 @@ func main() {
 			case error:
 				log.Fatalln(msg)
 			case clusterList:
+				var active string
+				switch msg := readActive().(type) {
+				case activeMsg:
+					active = string(msg)
+				}
+
 				table := tablewriter.NewWriter(os.Stdout)
 				table.SetHeader([]string{"Active", "Path", "Expired", "Created At", "Valid For"})
 				for _, cluster := range msg {
-					table.Append([]string{" ", cluster.Path(), strconv.FormatBool(cluster.Expired()), cluster.Time.String(), time.Duration(cluster.Lifespan * uint(time.Minute)).String()})
+					active = greenText.Render(strconv.FormatBool(active == cluster.Name))
+					expired := redText.Render(strconv.FormatBool(cluster.Expired()))
+					table.Append([]string{active, cluster.Path(), expired, cluster.Time.String(), time.Duration(cluster.Lifespan * uint(time.Minute)).String()})
 				}
 				table.Render()
 			}
