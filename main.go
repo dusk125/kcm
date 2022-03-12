@@ -7,10 +7,14 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/dusk125/kcm/pkg/config"
+	"github.com/olekukonko/tablewriter"
+	"github.com/spf13/cobra"
 )
 
 type fileInfo struct {
@@ -35,38 +39,8 @@ func (f fileInfo) Expired() bool {
 	return time.Now().After(f.Time.Add(time.Minute * 150))
 }
 
-type ConfigDir struct {
-	Dir        string
-	FileSuffix string
-	FileFormat string
-	Lifespan   uint // Number of minutes until this cluster expires (0 is never expire)
-}
-
-type Config struct {
-	WatchDirs      []ConfigDir
-	KubeconfigLink string
-}
-
-func (c *Config) replace(o string, s string) {
-	c.KubeconfigLink = strings.ReplaceAll(c.KubeconfigLink, o, s)
-	for i := range c.WatchDirs {
-		c.WatchDirs[i].Dir = strings.ReplaceAll(c.WatchDirs[i].Dir, o, s)
-	}
-}
-
 var (
-	DefaultConfig = Config{
-		WatchDirs: []ConfigDir{
-			{
-				Dir:        "$HOME/Downloads",
-				FileSuffix: ".kubeconfig.txt",
-				FileFormat: "cluster-bot-2006-01-02-150405.kubeconfig.txt",
-				Lifespan:   150,
-			},
-		},
-		KubeconfigLink: "$HOME/.cluster",
-	}
-	config Config
+	conf config.Config
 )
 
 type clusterList []fileInfo
@@ -92,19 +66,19 @@ func initialState() tea.Msg {
 		clusters = clusterList{}
 	)
 
-	for _, conf := range config.WatchDirs {
-		if files, err = os.ReadDir(conf.Dir); err != nil {
+	for _, wDir := range conf.WatchDirs {
+		if files, err = os.ReadDir(wDir.Dir); err != nil {
 			return err
 		}
 
 		for _, file := range files {
-			if !file.IsDir() && strings.HasSuffix(file.Name(), conf.FileSuffix) {
+			if !file.IsDir() && strings.HasSuffix(file.Name(), wDir.FileSuffix) {
 				info := fileInfo{
-					Dir:      conf.Dir,
+					Dir:      wDir.Dir,
 					Name:     file.Name(),
-					Lifespan: conf.Lifespan,
+					Lifespan: wDir.Lifespan,
 				}
-				if info.Time, err = time.Parse(conf.FileFormat, info.Name); err != nil {
+				if info.Time, err = time.Parse(wDir.FileFormat, info.Name); err != nil {
 					return err
 				}
 				clusters = append(clusters, info)
@@ -120,19 +94,19 @@ func readActive() tea.Msg {
 		err    error
 		active string
 	)
-	if active, err = os.Readlink(config.KubeconfigLink); err != nil {
+	if active, err = os.Readlink(conf.KubeconfigLink); err != nil {
 		return activeMsg("")
 	}
 	return activeMsg(path.Base(active))
 }
 
 func rmActive() tea.Msg {
-	_ = os.Remove(config.KubeconfigLink)
+	_ = os.Remove(conf.KubeconfigLink)
 	return nil
 }
 
 func (m *model) addActive() tea.Msg {
-	return os.Symlink(m.clusters[m.cursor].Path(), config.KubeconfigLink)
+	return os.Symlink(m.clusters[m.cursor].Path(), conf.KubeconfigLink)
 }
 
 func (m *model) Init() tea.Cmd {
@@ -195,7 +169,7 @@ func (m *model) View() string {
 			} else {
 				ss = append(ss, "[ ]")
 			}
-			if time.Now().After(cluster.Time.Add(time.Minute * 150)) {
+			if cluster.Expired() {
 				ss = append(ss, "[EXPIRED]")
 			}
 			ss = append(ss, cluster.Name)
@@ -207,19 +181,29 @@ func (m *model) View() string {
 	return s
 }
 
-func main() {
+func runTui() {
+	if os.Getenv("KUBECONFIG") == "" {
+		log.Fatalf("KUBECONFIG needs to be set:\n\texport KUBECONFIG=%v\n", conf.KubeconfigLink)
+	}
+
+	p := tea.NewProgram(initialModel())
+	if err := p.Start(); err != nil {
+		log.Fatalln(err)
+	}
+}
+
+func ensureConf() {
 	var (
 		err  error
 		home string
 	)
-
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	if home, err = os.UserHomeDir(); err != nil {
 		log.Fatalln(err)
 	}
 
 	userConf := path.Join(home, ".kcm")
+
 	if _, err = os.Stat(userConf); os.IsExist(err) {
 		var (
 			fi *os.File
@@ -230,7 +214,7 @@ func main() {
 		}
 		defer fi.Close()
 
-		if err = json.NewDecoder(fi).Decode(&config); err != nil {
+		if err = json.NewDecoder(fi).Decode(&conf); err != nil {
 			log.Fatalln(err)
 		}
 	} else {
@@ -243,20 +227,48 @@ func main() {
 		}
 		defer fi.Close()
 
-		config = DefaultConfig
-		config.replace("$HOME", home)
+		conf = config.Default
+		conf.Replace("$HOME", home)
 
-		if err = json.NewEncoder(fi).Encode(&config); err != nil {
+		if err = json.NewEncoder(fi).Encode(&conf); err != nil {
 			log.Fatalln(err)
 		}
 	}
+}
 
-	if os.Getenv("KUBECONFIG") == "" {
-		log.Fatalf("KUBECONFIG needs to be set:\n\texport KUBECONFIG=%v\n", config.KubeconfigLink)
+func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	cmd := &cobra.Command{
+		Use:   "kcm",
+		Short: "kcm a simple way to manage and use your kubeconfigs",
+		Long:  `KubeConfg Manager allows you to keep track of your various kubeconfig files and easily switch between them`,
+		Run: func(cmd *cobra.Command, args []string) {
+			ensureConf()
+			runTui()
+		},
 	}
 
-	p := tea.NewProgram(initialModel())
-	if err := p.Start(); err != nil {
+	cmd.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List kubeconfig files found in config.WatchDirs",
+		Run: func(cmd *cobra.Command, args []string) {
+			ensureConf()
+			switch msg := initialState().(type) {
+			case error:
+				log.Fatalln(msg)
+			case clusterList:
+				table := tablewriter.NewWriter(os.Stdout)
+				table.SetHeader([]string{"Active", "Path", "Expired", "Created At", "Valid For"})
+				for _, cluster := range msg {
+					table.Append([]string{" ", cluster.Path(), strconv.FormatBool(cluster.Expired()), cluster.Time.String(), time.Duration(cluster.Lifespan * uint(time.Minute)).String()})
+				}
+				table.Render()
+			}
+		},
+	})
+
+	if err := cmd.Execute(); err != nil {
 		log.Fatalln(err)
 	}
 }
