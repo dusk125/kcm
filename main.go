@@ -8,7 +8,6 @@ import (
 	"os"
 	"path"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +37,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Refresh, k.Clear, k.Delete},
-		{k.Up, k.Down, k.Select, k.Quit},
+		k.ShortHelp(),
 	}
 }
 
@@ -74,6 +73,14 @@ var (
 		),
 	}
 )
+
+func fmtYesNo(v bool) string {
+	if v {
+		return "yes"
+	} else {
+		return "no"
+	}
+}
 
 type fileInfo struct {
 	Name     string
@@ -352,9 +359,14 @@ func main() {
 				table := tablewriter.NewWriter(os.Stdout)
 				table.SetHeader([]string{"Active", "Path", "Expired", "Created At", "Valid For"})
 				for _, cluster := range msg {
-					active = greenText.Render(strconv.FormatBool(active == cluster.Name))
-					expired := redText.Render(strconv.FormatBool(cluster.Expired()))
-					table.Append([]string{active, cluster.Path(), expired, cluster.Time.String(), time.Duration(cluster.Lifespan * uint(time.Minute)).String()})
+					var a string
+					if active == cluster.Name {
+						a = greenText.Render("yes")
+					} else {
+						a = ""
+					}
+					expired := redText.Render(fmtYesNo(cluster.Expired()))
+					table.Append([]string{a, cluster.Path(), expired, cluster.Time.String(), time.Duration(cluster.Lifespan * uint(time.Minute)).String()})
 				}
 				table.Render()
 			}
