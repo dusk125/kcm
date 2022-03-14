@@ -99,7 +99,7 @@ func (f fileInfo) Delete() tea.Msg {
 
 func (f fileInfo) Expired() bool {
 	if f.Lifespan == 0 {
-		return true
+		return false
 	}
 	return time.Now().After(f.Time.Add(time.Minute * 150))
 }
@@ -150,8 +150,10 @@ func initialState() tea.Msg {
 					Name:     file.Name(),
 					Lifespan: wDir.Lifespan,
 				}
-				if info.Time, err = time.Parse(wDir.FileFormat, info.Name); err != nil {
-					return err
+				if wDir.FileFormat != "" {
+					if info.Time, err = time.Parse(wDir.FileFormat, info.Name); err != nil {
+						return err
+					}
 				}
 				clusters = append(clusters, info)
 			}
@@ -295,8 +297,11 @@ func ensureConf() {
 		log.Fatalln(err)
 	}
 
-	userConf := path.Join(home, ".kcm")
-	if _, err = os.Stat(userConf); os.IsExist(err) {
+	var (
+		info     fs.FileInfo
+		userConf = path.Join(home, ".kcm")
+	)
+	if info, err = os.Stat(userConf); os.IsExist(err) || info.Name() != "" {
 		var (
 			fi *os.File
 		)

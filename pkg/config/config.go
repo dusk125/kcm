@@ -17,14 +17,21 @@ var (
 )
 
 type ConfigDir struct {
-	Dir        string
+	// The directory to search in for kubeconfig files. (will substitute $HOME to the users home directory)
+	Dir string
+	// The full extension (.kubeconfig.txt) of the files you're looking for.
 	FileSuffix string
+	// A time.Parse version of the filename you're expecting; is used with Lifespan to show whether a kubeconfig is expired or not.
 	FileFormat string
-	Lifespan   uint // Number of minutes until this cluster expires (0 is never expire)
+	// Number of minutes until this cluster expires (0 is never expire).
+	Lifespan uint
 }
 
 type Config struct {
-	WatchDirs      []ConfigDir
+	// List of directories to watch for kubeconfig files.
+	WatchDirs []ConfigDir
+	// The destintion of kubeconfig symlink; your KUBECONFIG env var should be set this to value as well.
+	// (Will substitute $HOME to the users home directory)
 	KubeconfigLink string
 }
 
