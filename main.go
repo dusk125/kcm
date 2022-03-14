@@ -255,15 +255,16 @@ func (m *model) View() string {
 			if m.cursor == i {
 				cursor = ">"
 			}
-			ss := []string{cursor, "["}
+			ss := []string{cursor}
+			sss := "["
 			if cluster.Name == m.active {
-				ss = append(ss, greenText.Render("x"))
+				sss += greenText.Render("x")
 			} else {
-				ss = append(ss, " ")
+				sss += " "
 			}
-			ss = append(ss, "]")
+			ss = append(ss, sss+"]")
 			if cluster.Expired() {
-				ss = append(ss, "[", redText.Render("EXPIRED"), "]")
+				ss = append(ss, "["+redText.Render("EXPIRED")+"]")
 			}
 			ss = append(ss, cluster.Name)
 			s += strings.Join(ss, " ") + "\n"
