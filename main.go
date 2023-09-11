@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path"
-	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/dusk125/kcm/pkg/config"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
+	"golang.org/x/exp/slices"
 )
 
 type keyMap struct {
@@ -180,9 +180,12 @@ func rmActive() tea.Msg {
 }
 
 func (m *model) addActive() tea.Msg {
-	cluster := m.clusters[m.cursor]
-	fmt.Printf("%v is now your active kubeconfig.\n", cluster.Name)
-	return os.Symlink(cluster.Path(), conf.KubeconfigLink)
+	if m.cursor >= 0 && m.cursor < len(m.clusters) {
+		cluster := m.clusters[m.cursor]
+		fmt.Printf("%v is now your active kubeconfig.\n", cluster.Name)
+		return os.Symlink(cluster.Path(), conf.KubeconfigLink)
+	}
+	return nil
 }
 
 func (m *model) Init() tea.Cmd {
@@ -193,18 +196,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case clusterList:
 		m.clusters = msg
-		sort.Slice(m.clusters, func(i, j int) bool {
-			ic, jc := m.clusters[i], m.clusters[j]
-			eic, ejc := ic.Expired(), jc.Expired()
-			if eic != ejc {
+		slices.SortFunc[clusterList, fileInfo](m.clusters, func(a, b fileInfo) int {
+			aExpired, bExpired := a.Expired(), b.Expired()
+			if aExpired != bExpired {
 				switch {
-				case eic:
-					return false
-				case ejc:
-					return true
+				case aExpired:
+					return -1
+				case bExpired:
+					return 1
 				}
 			}
-			return m.clusters[j].Time.After(m.clusters[i].Time)
+			return b.Time.Compare(a.Time)
 		})
 	case error:
 		m.err = msg
@@ -225,7 +227,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor++
 			}
 		case key.Matches(msg, m.keys.Select):
-			return m, tea.Sequentially(rmActive, m.addActive, tea.Quit)
+			return m, tea.Sequence(rmActive, m.addActive, tea.Quit)
 		case key.Matches(msg, m.keys.Refresh):
 			return m, initialState
 		case key.Matches(msg, m.keys.Delete):
@@ -233,10 +235,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if active := readActive().(activeMsg); string(active) == m.clusters[m.cursor].Name {
 				cmds = append([]tea.Cmd{rmActive}, cmds...)
 			}
-			return m, tea.Sequentially(cmds...)
+			return m, tea.Sequence(cmds...)
 		case key.Matches(msg, m.keys.Clear):
 			if m.active != "" {
-				return m, tea.Sequentially(rmActive, readActive)
+				return m, tea.Sequence(rmActive, readActive)
 			}
 		}
 	}
@@ -281,7 +283,7 @@ func runTui() {
 	}
 
 	p := tea.NewProgram(initialModel())
-	if err := p.Start(); err != nil {
+	if _, err := p.Run(); err != nil {
 		log.Fatalln(err)
 	}
 }
@@ -300,7 +302,7 @@ func ensureConf() {
 		info     fs.FileInfo
 		userConf = path.Join(home, ".kcm")
 	)
-	if info, err = os.Stat(userConf); os.IsExist(err) || info.Name() != "" {
+	if info, err = os.Stat(userConf); os.IsExist(err) || (info != nil && info.Name() != "") {
 		var (
 			fi *os.File
 		)
