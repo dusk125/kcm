@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,7 +18,6 @@ import (
 	"github.com/dusk125/kcm/pkg/config"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
-	"golang.org/x/exp/slices"
 )
 
 type keyMap struct {
@@ -196,7 +196,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case clusterList:
 		m.clusters = msg
-		slices.SortFunc[clusterList, fileInfo](m.clusters, func(a, b fileInfo) int {
+		slices.SortFunc(m.clusters, func(a, b fileInfo) int {
 			aExpired, bExpired := a.Expired(), b.Expired()
 			if aExpired != bExpired {
 				switch {
@@ -231,11 +231,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Refresh):
 			return m, initialState
 		case key.Matches(msg, m.keys.Delete):
-			cmds := []tea.Cmd{m.clusters[m.cursor].Delete, initialState}
-			if active := readActive().(activeMsg); string(active) == m.clusters[m.cursor].Name {
-				cmds = append([]tea.Cmd{rmActive}, cmds...)
+			if len(m.clusters) != 0 {
+				cmds := []tea.Cmd{m.clusters[m.cursor].Delete, initialState}
+				if active := readActive().(activeMsg); string(active) == m.clusters[m.cursor].Name {
+					cmds = append([]tea.Cmd{rmActive}, cmds...)
+				}
+				return m, tea.Sequence(cmds...)
 			}
-			return m, tea.Sequence(cmds...)
 		case key.Matches(msg, m.keys.Clear):
 			if m.active != "" {
 				return m, tea.Sequence(rmActive, readActive)
@@ -360,11 +362,11 @@ func main() {
 	cmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List kubeconfig files found in config.WatchDirs",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			ensureConf()
 			switch msg := initialState().(type) {
 			case error:
-				log.Fatalln(msg)
+				return msg
 			case clusterList:
 				var active string
 				switch msg := readActive().(type) {
@@ -373,7 +375,7 @@ func main() {
 				}
 
 				table := tablewriter.NewWriter(os.Stdout)
-				table.SetHeader([]string{"Active", "Path", "Expired", "Created At", "Valid For"})
+				table.Header("Active", "Path", "Expired", "Created At", "Valid For")
 				for _, cluster := range msg {
 					var a string
 					if active == cluster.Name {
@@ -382,10 +384,15 @@ func main() {
 						a = ""
 					}
 					expired := redText.Render(fmtYesNo(cluster.Expired()))
-					table.Append([]string{a, cluster.Path(), expired, cluster.Time.String(), time.Duration(cluster.Lifespan * uint(time.Minute)).String()})
+					if err := table.Append(a, cluster.Path(), expired, cluster.Time.String(), time.Duration(cluster.Lifespan*uint(time.Minute)).String()); err != nil {
+						return fmt.Errorf("failed to append to the table: %v", err)
+					}
 				}
-				table.Render()
+				if err := table.Render(); err != nil {
+					return fmt.Errorf("failed to render the table: %v", err)
+				}
 			}
+			return nil
 		},
 	})
 
